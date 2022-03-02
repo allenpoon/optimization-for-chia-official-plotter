@@ -1,0 +1,72 @@
+yum install vmtouch bc mdadm
+
+mkdir -p /home/allen/chia/cache-queue
+mount -t tmpfs -o size=16m tmpfs /home/allen/chia/cache-queue
+mkdir -p /home/allen/chia/cache-queue/chia-evict
+mkdir -p /home/allen/chia/cache-queue/chia-long-cache
+mkdir -p /home/allen/chia/cache-queue/chia-short-cache
+mount 192.168.100.242:/volume1/chia /mnt/chia-harvester2/
+mount 192.168.100.242:/volume1/chia /mnt/chia-harvester/
+systemctl start docker
+
+# 192.168.100.231
+docker run --name chia0 -d -v /mnt/chia-farmer:/mnt/chia-farmer -v /mnt/chia-harvester/final:/mnt/chia-harvester/final -e farmer="true" ghcr.io/chia-network/chia:latest
+
+# 192.168.1.5
+docker run --name chia4 -d -v /mnt/chia-farmer:/mnt/chia-farmer -v /mnt/chia-harvester/final:/mnt/chia-harvester/final -e farmer="true" ghcr.io/chia-network/chia:latest
+docker exec -it chia venv/bin/chia plots create -k 32 -n 1 -r 24 -f b3fdfc0e00d35a44ab05b2a4edfb554e07eea217b9b3d6e3e1c559a7a786f50a25d573b8d20e5d9f228e578b5ff0ecc3 -p 846947b7d22adc1a99b9f773e758f5fe1fb6fee8d6cbb062c68f128debec21502e96b99d878e7e5d77b705d81e223d12 -t /mnt/chia-farmer/tmp/ -d /mnt/chia-harvester/final/
+
+
+mount -o async,noatime,nodiratime,blksize=1048576 /dev/sdc /mnt/chia-farmer
+
+
+mdadm --stop /dev/md0
+
+# 192.168.100.231
+mdadm --create /dev/md0 --level=stripe --raid-devices=3 /dev/sdb1 /dev/sdc /dev/sdd1
+mkfs.xfs -m crc=0 -f /dev/md0
+
+# 192.168.1.5
+mdadm --create /dev/md0 --level=stripe --raid-devices=2 /dev/sd[c-d]
+mkfs.xfs -m crc=0 -f /dev/md0
+
+
+mount -o async,noatime,nodiratime,allocsize=1g,noikeep,largeio,nobarrier,logbufs=8,logbsize=256k,swalloc /dev/md0 /mnt/chia-farmer
+
+watch -n 0.1 "ps aux --width 1000 | grep vmtouch | grep -v grep  | sed 's/\/mnt\/\(chia-farmer\/tmp\|chia-harvester\/final\|tmp-disk-0\|tmp-disk-1\|tmp-disk-2\)\/plot-k32-[0-9]\{4\}\(-[0-9]\{2\}\)\{4\}-\([0-9a-f]\{2\}\)[0-9a-f]\{60\}\([0-9a-f]\{2\}\)\.plot/\3\4/g' | sed 's/sort_bucket_//g' | sed 's/\.tmp//g' | awk '{\$1=\$3=\$4=\$5=\$6=\$7=\$8=\$9=\$10=\$11=\"\";print}' | sed 's/         //' | grep -v vmtouch"
+
+
+
+
+      p1_1_cache_clear_tmp=$(ls -l /proc/$pid/fd | grep /mnt | grep '.plot.2.tmp' | awk '{print $11}' | head -1)
+      if [ "$p1_1_cache_clear_tmp" != "" ]; then
+        p1_1_cache_clear_list=$(ls $(echo $p1_1_cache_clear_tmp | sed 's/table[1-7].*/table*/') | grep -v table7)
+
+ | sed 's/chia-farmer\/tmp/chia-harvester\/final/'
+
+pid=
+tmp_tmp_path=$(ls -l /proc/$pid/fd | grep /mnt | grep '.plot.2.tmp' | awk '{print $11}' | head -1)
+tmp_final_path=$(echo $tmp_tmp_path | sed 's/chia-farmer\/tmp/chia-harvester\/final/' | sed 's/.plot.2.tmp/.plot/')
+#tmp_final_path=$(echo $tmp_tmp_path | sed 's/.plot.2.tmp/.plot/')
+
+final_tmp_path=$(echo $tmp_tmp_path | sed 's/chia-farmer\/tmp/chia-harvester\/final/').working
+final_final_path=$(echo $final_tmp_path | sed 's/.plot.2.tmp.working/.plot.check/')
+
+bash -c "inotifywait -m $tmp_tmp_path | while read path && ps aux | grep $pid | grep -v grep >/dev/null; do while read -t 2 a; do true; done; ps aux | grep $pid | grep -v grep >/dev/null && rsync --append $tmp_tmp_path $final_tmp_path; done"
+
+rsync --append $tmp_final_path $final_tmp_path
+
+# check size
+size_tmp=$(ls -l $tmp_final_path | head -1 | awk '{print $5}')
+size_final=$(ls -l $final_tmp_path | head -1 | awk '{print $5}')
+
+if [ "$size_tmp" = "$size_final" ]; then
+  dd bs=256 count=1 conv=notrunc if=$tmp_final_path of=$final_tmp_path
+  mv $final_tmp_path $final_final_path
+else
+#  cp -f $tmp_final_path $final_tmp_path
+#  mv $final_tmp_path $(echo $final_tmp_path | sed 's/.plot.2.tmp.working/.test_not_work.plot/')
+fi
+# mv $final_tmp_path $(echo $final_tmp_path | sed 's/.plot.2.tmp.working/.plot/')
+
+#rm -f /mnt/chia-farmer/tmp/$tmp_file
